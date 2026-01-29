@@ -71,6 +71,12 @@ from agents.data_agent import DataAgent
 from agents.security_agent import SecurityAgent
 from agents.docs_agent import DocsAgent
 
+# Visual Layer v2.5 - Import routes
+from api.routes.preview import router as preview_router
+from api.routes.deploy import router as deploy_router
+from services.preview.file_watcher import init_file_watcher, get_file_watcher
+from services.preview.preview_manager import get_preview_manager
+
 orchestrator = OrchestratorAgent()
 soma_front = FrontendAgent()
 soma_back = BackendAgent()
@@ -84,6 +90,13 @@ soma_mobile = MobileAgent()
 soma_data = DataAgent()
 soma_sec = SecurityAgent()
 soma_docs = DocsAgent()
+
+# Visual Layer v2.5 - Register routers
+app.include_router(preview_router)
+app.include_router(deploy_router)
+
+# Initialize file watcher
+_file_watcher = init_file_watcher()
 
 @app.get("/")
 def read_root():

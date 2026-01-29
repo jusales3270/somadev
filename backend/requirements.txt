@@ -5,3 +5,8 @@ python-multipart
 websockets
 google-generativeai
 python-dotenv
+# Visual Layer v2.5 dependencies
+watchdog
+httpx
+python-socketio[asyncio]
+aiofiles
