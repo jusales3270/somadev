@@ -63,6 +63,13 @@ from agents.backend_agent import BackendAgent
 from agents.qa_agent import QAAgent
 from agents.devops_agent import DevOpsAgent
 from agents.design_agent import DesignAgent
+# New v2.0 Agents
+from agents.architect_agent import ArchitectAgent
+from agents.lead_agent import LeadAgent
+from agents.mobile_agent import MobileAgent
+from agents.data_agent import DataAgent
+from agents.security_agent import SecurityAgent
+from agents.docs_agent import DocsAgent
 
 orchestrator = OrchestratorAgent()
 soma_front = FrontendAgent()
@@ -70,6 +77,13 @@ soma_back = BackendAgent()
 soma_qa = QAAgent()
 soma_ops = DevOpsAgent()
 soma_design = DesignAgent()
+# New v2.0 Agent Instances
+soma_arch = ArchitectAgent()
+soma_lead = LeadAgent()
+soma_mobile = MobileAgent()
+soma_data = DataAgent()
+soma_sec = SecurityAgent()
+soma_docs = DocsAgent()
 
 @app.get("/")
 def read_root():
@@ -200,6 +214,19 @@ def run_agent_task(task_id: int):
             result = soma_ops.execute_task(f"{task['title']}: {task.get('description', '')}", log_callback=agent_logger)
         elif task["agent"] == "SomaDesign":
             result = soma_design.execute_task(f"{task['title']}: {task.get('description', '')}", log_callback=agent_logger)
+        # New v2.0 Agents
+        elif task["agent"] == "SomaArch":
+            result = soma_arch.execute_task(f"{task['title']}: {task.get('description', '')}", log_callback=agent_logger)
+        elif task["agent"] == "SomaLead":
+            result = soma_lead.execute_task(f"{task['title']}: {task.get('description', '')}", log_callback=agent_logger)
+        elif task["agent"] == "SomaMobile":
+            result = soma_mobile.execute_task(f"{task['title']}: {task.get('description', '')}", log_callback=agent_logger)
+        elif task["agent"] == "SomaData":
+            result = soma_data.execute_task(f"{task['title']}: {task.get('description', '')}", log_callback=agent_logger)
+        elif task["agent"] == "SomaSec":
+            result = soma_sec.execute_task(f"{task['title']}: {task.get('description', '')}", log_callback=agent_logger)
+        elif task["agent"] == "SomaDocs":
+            result = soma_docs.execute_task(f"{task['title']}: {task.get('description', '')}", log_callback=agent_logger)
         else:
              log_event("Orchestrator", f"⚠️ Agent {task['agent']} not found. Defaulting to Orchestrator/Generic.")
              result = f"Simulation: Task executed by {task['agent']}"
@@ -261,3 +288,57 @@ async def execute_task(task_id: int, background_tasks: BackgroundTasks, api_key:
     background_tasks.add_task(run_agent_task, task_id)
     
     return {"status": "queued", "message": "Task started in background"}
+
+# =====================================
+# AIOS Rules Endpoint
+# =====================================
+import pathlib
+
+# Map agent names to their AIOS rule files
+AGENT_RULES_MAP = {
+    "sara": "pm.md",
+    "somaarch": "architect.md",
+    "somalead": "dev.md",  # Uses dev.md as base
+    "somafront": "dev.md",
+    "somaback": "dev.md",
+    "somamobile": "dev.md",
+    "somadata": "data-engineer.md",
+    "somaqA": "qa.md",
+    "somaops": "devops.md",
+    "somadesign": "ux-design-expert.md",
+    "somasec": "devops.md",  # Security uses devops as base
+    "somadocs": "pm.md"  # Docs uses PM as base
+}
+
+@app.get("/rules/{agent_name}")
+def get_agent_rules(agent_name: str):
+    """Retrieve AIOS rules for a specific agent."""
+    agent_key = agent_name.lower()
+    
+    if agent_key not in AGENT_RULES_MAP:
+        raise HTTPException(status_code=404, detail=f"Agent '{agent_name}' not found")
+    
+    rule_file = AGENT_RULES_MAP[agent_key]
+    rules_path = pathlib.Path(__file__).parent / "core_engine" / ".cursor" / "rules" / "agents" / rule_file
+    
+    if not rules_path.exists():
+        raise HTTPException(status_code=404, detail=f"Rule file not found: {rule_file}")
+    
+    try:
+        with open(rules_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        return {
+            "agent": agent_name,
+            "rule_file": rule_file,
+            "content": content
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error reading rules: {str(e)}")
+
+@app.get("/rules")
+def list_available_rules():
+    """List all available agent rules."""
+    return {
+        "agents": list(AGENT_RULES_MAP.keys()),
+        "total": len(AGENT_RULES_MAP)
+    }
