@@ -6,6 +6,10 @@ from pydantic import BaseModel
 from typing import Optional, Dict
 from pathlib import Path
 
+# Relative imports
+from services.preview.preview_manager import get_preview_manager
+from services.preview.file_watcher import get_file_watcher
+
 router = APIRouter(prefix="/api/preview", tags=["preview"])
 
 
@@ -34,9 +38,6 @@ async def initialize_preview(
     2. Inicia dev server
     3. Retorna URL de preview
     """
-    from backend.services.preview.preview_manager import get_preview_manager
-    from backend.services.preview.file_watcher import get_file_watcher
-    
     project_id = request.project_id
     preview_manager = get_preview_manager()
     
@@ -65,9 +66,6 @@ async def destroy_preview(project_id: str):
     """
     Destrói ambiente de preview
     """
-    from backend.services.preview.preview_manager import get_preview_manager
-    from backend.services.preview.file_watcher import get_file_watcher
-    
     try:
         preview_manager = get_preview_manager()
         await preview_manager.destroy_preview(project_id)
@@ -86,8 +84,6 @@ async def restart_preview(project_id: str):
     """
     Reinicia preview (útil após mudanças estruturais)
     """
-    from backend.services.preview.preview_manager import get_preview_manager
-    
     try:
         preview_manager = get_preview_manager()
         result = await preview_manager.restart_preview(project_id)
@@ -101,8 +97,6 @@ async def get_preview_status(project_id: str):
     """
     Retorna status do preview
     """
-    from backend.services.preview.preview_manager import get_preview_manager
-    
     preview_manager = get_preview_manager()
     return preview_manager.get_status(project_id)
 
@@ -112,8 +106,6 @@ async def list_all_previews():
     """
     Lista todos os previews ativos
     """
-    from backend.services.preview.preview_manager import get_preview_manager
-    
     preview_manager = get_preview_manager()
     return {
         "previews": preview_manager.list_previews(),

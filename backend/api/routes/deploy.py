@@ -6,6 +6,10 @@ from pydantic import BaseModel
 from typing import Optional, Dict
 from pathlib import Path
 
+# Relative imports
+from services.preview.preview_manager import get_preview_manager
+from services.deploy.vercel_deployer import get_vercel_deployer
+
 router = APIRouter(prefix="/api/deploy", tags=["deploy"])
 
 
@@ -30,9 +34,6 @@ async def deploy_project(request: DeployRequest):
     Providers suportados:
     - vercel (padrão)
     """
-    from backend.services.preview.preview_manager import get_preview_manager
-    from backend.services.deploy.vercel_deployer import get_vercel_deployer
-    
     project_id = request.project_id
     preview_manager = get_preview_manager()
     workspace_path = preview_manager.workspace_base / project_id
