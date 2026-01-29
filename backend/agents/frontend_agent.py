@@ -1,5 +1,6 @@
 import os
 import re
+import pathlib
 import google.generativeai as genai
 from dotenv import load_dotenv
 
@@ -41,16 +42,42 @@ import { motion } from 'framer-motion';
 Se precisar criar múltiplos arquivos, repita o padrão.
 """
 
+# Allowed file extensions for security
+ALLOWED_EXTENSIONS = {'.tsx', '.ts', '.css', '.js', '.jsx', '.json', '.md'}
+
 class FrontendAgent:
     def __init__(self, api_key: str = None):
         self.api_key = api_key or os.getenv("GEMINI_API_KEY")
         if self.api_key:
             genai.configure(api_key=self.api_key)
             self.model = genai.GenerativeModel('gemini-2.0-flash') 
-            self.base_path = "c:/Users/Administrador/Desktop/somadev/frontend/src"
+            # Use environment variable or relative path instead of hardcoded path
+            self.base_path = pathlib.Path(os.getenv("SOMADEV_FRONTEND_PATH", "./frontend/src")).resolve()
     
     def save_file(self, relative_path: str, content: str, log_callback=None):
-        full_path = os.path.join(self.base_path, relative_path)
+        """Safely save a file with path traversal protection."""
+        # Resolve the full path
+        base = self.base_path.resolve()
+        
+        # Sanitize the relative path - remove any leading slashes or dots
+        clean_path = relative_path.strip().lstrip('./\\')
+        full_path = (base / clean_path).resolve()
+        
+        # Security: Ensure the path is within base directory (prevent path traversal)
+        if not str(full_path).startswith(str(base)):
+            msg = f"🚫 Security: Path traversal attempt blocked: {relative_path}"
+            print(msg)
+            if log_callback: log_callback(msg)
+            raise ValueError(f"Path traversal attempt detected: {relative_path}")
+        
+        # Security: Only allow specific file extensions
+        ext = full_path.suffix.lower()
+        if ext not in ALLOWED_EXTENSIONS:
+            msg = f"🚫 Security: Blocked file with disallowed extension: {ext}"
+            print(msg)
+            if log_callback: log_callback(msg)
+            raise ValueError(f"File extension not allowed: {ext}")
+        
         os.makedirs(os.path.dirname(full_path), exist_ok=True)
         with open(full_path, "w", encoding="utf-8") as f:
             f.write(content)

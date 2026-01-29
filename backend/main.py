@@ -1,21 +1,46 @@
-from fastapi import FastAPI, HTTPException
+import os
+from fastapi import FastAPI, HTTPException, Request, Depends, Header
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from starlette.middleware.base import BaseHTTPMiddleware
 from pydantic import BaseModel
 from typing import List, Optional
 import time
 
 app = FastAPI(title="SomaDev Orchestrator", version="1.0.0")
 
-# CORS Setup
-origins = ["*"]
+# Security Headers Middleware
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["X-XSS-Protection"] = "1; mode=block"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        return response
+
+app.add_middleware(SecurityHeadersMiddleware)
+
+# CORS Setup - Restricted to specific origins
+# Add your production domain here when deploying
+ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000").split(",")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE"],
+    allow_headers=["Authorization", "Content-Type", "X-API-Key"],
 )
+
+# API Key Authentication
+SOMADEV_API_KEY = os.getenv("SOMADEV_API_KEY")
+
+async def verify_api_key(x_api_key: str = Header(None)):
+    """Verify API key if SOMADEV_API_KEY is configured."""
+    if SOMADEV_API_KEY and x_api_key != SOMADEV_API_KEY:
+        raise HTTPException(status_code=401, detail="Invalid or missing API Key")
+    return x_api_key
 
 class ChatRequest(BaseModel):
     message: str
@@ -61,10 +86,12 @@ def get_main_chat_history():
 import traceback
 
 @app.post("/chat")
-async def chat_endpoint(request: ChatRequest):
+async def chat_endpoint(request: ChatRequest, api_key: str = Depends(verify_api_key)):
     try:
-        print(f"Received message: {request.message}")
-        print(f"Orchestrator state: {orchestrator.model}")
+        # Log truncated message for privacy
+        msg_preview = request.message[:50] + "..." if len(request.message) > 50 else request.message
+        print(f"Received message: {msg_preview}")
+        print(f"Orchestrator model initialized: {orchestrator.model is not None}")
         
         # Process message
         
@@ -106,7 +133,8 @@ async def chat_endpoint(request: ChatRequest):
     except Exception as e:
         print("CRITICAL ERROR IN /chat ENDPOINT:")
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
+        # Don't expose internal error details to client in production
+        raise HTTPException(status_code=500, detail="An internal error occurred. Please try again later.")
 
 # In-Memory Log Store
 agent_logs = []
@@ -219,7 +247,7 @@ def run_agent_task(task_id: int):
         print(f"❌ Background Execution Failed: {e}")
 
 @app.post("/execute/{task_id}")
-async def execute_task(task_id: int, background_tasks: BackgroundTasks):
+async def execute_task(task_id: int, background_tasks: BackgroundTasks, api_key: str = Depends(verify_api_key)):
     # Find task
     task = next((t for t in mock_tasks if t["id"] == task_id), None)
     if not task:
