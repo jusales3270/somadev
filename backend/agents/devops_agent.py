@@ -1,89 +1,89 @@
 import os
 import re
-import google.generativeai as genai
+import pathlib
+from openai import OpenAI
 from dotenv import load_dotenv
 
 load_dotenv()
 
 SYSTEM_PROMPT = """
 # IDENTITY
-Você é **SomaOps**, o Arquiteto de Infraestrutura do SomaDev.
-Sua missão é automatizar tudo. Se uma tarefa precisa ser feita mais de uma vez, você cria um script para isso.
+Você é **SomaOps**, o especialista em DevOps do ecossistema SomaDev.
+Sua responsabilidade é criar Dockerfiles, CI/CD, scripts de deploy.
 
-# YOUR PHILOSOPHY: "AUTOMATION FIRST"
-- Você garante que o código rode em qualquer lugar (Docker).
-- Você prepara o terreno para o deploy contínuo (CI/CD).
-- Você gerencia dependências e scripts de build.
-
-# RESPONSIBILITIES
-1.  **Configuration:** Gerenciar `package.json`, `requirements.txt`, `.env.example`.
-2.  **Containerization:** Criar `Dockerfile` e `docker-compose.yml`.
-3.  **Pipelines:** Configurar GitHub Actions workflows (.github/workflows).
-4.  **Scripts:** Criar shell scripts ou scripts Python de automação para tarefas repetitivas.
+# YOUR ESTHETIC: "AUTOMATION FIRST"
+- Você automatiza tudo.
+- Stack: Docker, GitHub Actions, Vercel, Railway.
 
 # OUTPUT FORMAT (STRICT)
-
-Para cada arquivo que você criar, use o seguinte formato EXATO:
-
 **FILE: [caminho/relativo/do/arquivo]**
-```[linguagem]
-// código aqui
+```yaml ou dockerfile
+// conteúdo aqui
 ```
-
-Exemplo:
-**FILE: Dockerfile**
-```dockerfile
-FROM python:3.9
-WORKDIR /app
-...
-```
-
-Se precisar criar múltiplos arquivos, repita o padrão.
 """
+
+ALLOWED_EXTENSIONS = {'.yml', '.yaml', '.sh', '.Dockerfile', '.md', '.txt', '.json', ''}
 
 class DevOpsAgent:
     def __init__(self, api_key: str = None):
-        self.api_key = api_key or os.getenv("GEMINI_API_KEY")
+        self.api_key = api_key or os.getenv("OPENAI_API_KEY")
+        self.client = None
+        self.model_name = "gpt-5.2"
+        
         if self.api_key:
-            genai.configure(api_key=self.api_key)
-            self.model = genai.GenerativeModel('gemini-2.0-flash') 
-            # Ops works on the Project Root
-            self.base_path = "c:/Users/Administrador/Desktop/somadev"
+            try:
+                self.client = OpenAI(api_key=self.api_key)
+                print(f"✅ SomaOps initialized with {self.model_name}")
+            except Exception as e:
+                print(f"❌ SomaOps failed: {e}")
+        
+        self.base_path = pathlib.Path(".").resolve()
     
     def save_file(self, relative_path: str, content: str, log_callback=None):
-        full_path = os.path.join(self.base_path, relative_path)
-        os.makedirs(os.path.dirname(full_path), exist_ok=True)
+        base = self.base_path.resolve()
+        clean_path = relative_path.strip().lstrip('./')
+        full_path = (base / clean_path).resolve()
+        
+        if not str(full_path).startswith(str(base)):
+            raise ValueError(f"Path traversal blocked: {relative_path}")
+        
+        os.makedirs(os.path.dirname(full_path) if os.path.dirname(full_path) else ".", exist_ok=True)
         with open(full_path, "w", encoding="utf-8") as f:
             f.write(content)
-        msg = f"🔧 SomaOps Saved: {full_path}"
+        msg = f"💾 SomaOps Saved: {full_path}"
         print(msg)
         if log_callback: log_callback(msg)
 
     def execute_task(self, task_description: str, log_callback=None) -> str:
-        if not self.model:
-            return "Error: Gemini API Key not configured."
+        if not self.client:
+            return "Error: OpenAI API Key not configured."
         
-        msg = f"🔧 SomaOps working on: {task_description}"
+        msg = f"🚀 SomaOps working on: {task_description}"
         print(msg)
         if log_callback: log_callback(msg)
         
         try:
-            prompt = f"{SYSTEM_PROMPT}\n\nTASK: {task_description}\n\nGenerate the necessary configuration files now."
-            response = self.model.generate_content(prompt)
-            text = response.text
+            response = self.client.chat.completions.create(
+                model=self.model_name,
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": f"TASK: {task_description}\n\nGenerate configuration files."}
+                ],
+                temperature=0.7
+            )
             
-            # Regex Parsing for Files
-            files = re.findall(r"\*\*FILE: (.*?)\*\*\n```(?:.*?)?\n(.*?)```", text, re.DOTALL)
+            text = response.choices[0].message.content
+            files = re.findall(r"\*\*FILE: (.*?)\*\*\n```(?:yaml|dockerfile|sh|bash)?\n(.*?)```", text, re.DOTALL)
             
             if not files:
-                 return f"SomaOps completed the review. No config files generated."
+                return f"SomaOps failed. Output: {text[:500]}..."
 
-            generated_files = []
+            generated = []
             for filename, content in files:
                 self.save_file(filename.strip(), content.strip(), log_callback)
-                generated_files.append(filename)
+                generated.append(filename.strip())
                 
-            return f"SomaOps Successfully Created: {', '.join(generated_files)}"
+            return f"SomaOps Created: {', '.join(generated)}"
 
         except Exception as e:
-            return f"SomaOps Execution Error: {str(e)}"
+            return f"SomaOps Error: {str(e)}"

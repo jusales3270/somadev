@@ -49,7 +49,10 @@ export default function WelcomeChat({ onProjectCreated }: WelcomeChatProps) {
         try {
             const res = await fetch('http://localhost:8000/chat', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: {
+                    'Content-Type': 'application/json',
+                    'x-api-key': process.env.NEXT_PUBLIC_API_KEY || 'FW3Gt1SJ9qFHO_ZaFTo-KAWLLKJOeBNYAF83rGZJxUE'
+                },
                 body: JSON.stringify({ message: userMsg })
             });
             const data = await res.json();
@@ -117,7 +120,7 @@ export default function WelcomeChat({ onProjectCreated }: WelcomeChatProps) {
                                 ? 'bg-orange-600 text-white shadow-lg'
                                 : 'bg-zinc-800/80 text-zinc-200 border border-zinc-700/50 shadow-sm'
                                 }`}>
-                                <div dangerouslySetInnerHTML={{ __html: msg.text.replace(/\n/g, '<br/>') }} />
+                                <div dangerouslySetInnerHTML={{ __html: (msg.text || '').replace(/\n/g, '<br/>') }} />
                             </div>
                         </motion.div>
                     ))}

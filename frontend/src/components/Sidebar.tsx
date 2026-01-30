@@ -9,7 +9,8 @@ import {
   Github,
   GitBranch,
   Settings,
-  HelpCircle
+  HelpCircle,
+  Eye
 } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
@@ -53,6 +54,7 @@ export default function Sidebar() {
           <div className="space-y-1">
             <p className="px-2 text-xs font-semibold text-zinc-500 mb-2 uppercase tracking-wider">Project</p>
             <SidebarLink href="/" icon={LayoutDashboard} label="Kanban Board" />
+            <SidebarLink href="/canvas" icon={Eye} label="Canvas Preview" />
             <SidebarLink href="/agents" icon={TerminalSquare} label="Agent Terminals" />
             <SidebarLink href="/insights" icon={LineChart} label="Insights" />
             <SidebarLink href="/roadmap" icon={Map} label="Roadmap" />

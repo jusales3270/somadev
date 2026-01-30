@@ -1,13 +1,21 @@
 import os
-from fastapi import FastAPI, HTTPException, Request, Depends, Header
+from datetime import datetime
+from fastapi import FastAPI, HTTPException, Request, Depends, Header, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from pydantic import BaseModel
 from typing import List, Optional
 import time
+import traceback
 
-app = FastAPI(title="SomaDev Orchestrator", version="1.0.0")
+# Database and Middleware
+from database import get_db, TaskRepository, init_db
+from middleware import RateLimitMiddleware
+from prometheus_fastapi_instrumentator import Instrumentator
+from tasks import run_agent_task # Celery Task
+
+app = FastAPI(title="SomaDev Orchestrator", version="2.0.0")
 
 # Security Headers Middleware
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
@@ -20,6 +28,12 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         return response
 
 app.add_middleware(SecurityHeadersMiddleware)
+
+# Observability
+Instrumentator().instrument(app).expose(app)
+
+# Rate Limiting Middleware - 60 requests/minute with burst of 10
+app.add_middleware(RateLimitMiddleware, requests_per_minute=60, burst_size=10)
 
 # CORS Setup - Restricted to specific origins
 # Add your production domain here when deploying
@@ -53,8 +67,8 @@ class Task(BaseModel):
     agent: str
 
 # Real Database (Simple List for now)
-# Real Database (Simple List for now)
-mock_tasks = []
+# mock_tasks removed in favor of DB
+
 
 # Initialize Agent
 from agents.orchestrator import OrchestratorAgent
@@ -107,31 +121,37 @@ def health_check():
     return {"status": "ok"}
 
 @app.get("/chat/history")
-def get_main_chat_history():
-    return orchestrator.get_history()
+def get_main_chat_history(db = Depends(get_db)):
+    repo = TaskRepository(db)
+    # Assuming project_id 1 for default/main project
+    return repo.get_chat_history(project_id=1)
 
 import traceback
 
 @app.post("/chat")
-async def chat_endpoint(request: ChatRequest, api_key: str = Depends(verify_api_key)):
+async def chat_endpoint(request: ChatRequest, api_key: str = Depends(verify_api_key), db = Depends(get_db)):
     try:
         # Log truncated message for privacy
         msg_preview = request.message[:50] + "..." if len(request.message) > 50 else request.message
         print(f"Received message: {msg_preview}")
-        print(f"Orchestrator model initialized: {orchestrator.model is not None}")
+        print(f"Orchestrator client initialized: {orchestrator.client is not None}")
         
         # Process message
         
         # Save to History (Simplistic)
         if "[BRAINSTORM MODE]" in request.message:
-            ideation_history.append({"role": "user", "text": request.message.replace("[BRAINSTORM MODE] ", "")})
+            # ideation_history.append({"role": "user", "text": request.message.replace("[BRAINSTORM MODE] ", "")})
+            pass
 
         result = await orchestrator.process_message(request.message)
         
+        # Save to DB
+        repo = TaskRepository(db)
+        repo.add_chat_message(project_id=1, role="user", content=request.message)
+        
         # Save AI Response to History
-        if "[BRAINSTORM MODE]" in request.message:
-             response_text = result.get("text", "") if isinstance(result, dict) else str(result)
-             ideation_history.append({"role": "ai", "text": response_text})
+        response_text = result.get("text", "") if isinstance(result, dict) else str(result)
+        repo.add_chat_message(project_id=1, role="assistant", content=response_text)
         
         # Handle Structured Data (Kanban Updates)
         if isinstance(result, dict):
@@ -140,18 +160,15 @@ async def chat_endpoint(request: ChatRequest, api_key: str = Depends(verify_api_
             
             if kanban_data and "kanban_tasks" in kanban_data:
                 print(f"♻️ Updating Kanban Board with {len(kanban_data['kanban_tasks'])} tasks.")
-                global mock_tasks
-                mock_tasks.clear()
                 
-                # Transform JSON tasks to Internal Task Model
-                for i, task in enumerate(kanban_data['kanban_tasks']):
-                    new_task = {
-                        "id": i + 1,
-                        "title": task.get("title", "Untitled"),
-                        "status": "To Do", # Default status
-                        "agent": task.get("agent", "SomaBot")
-                    }
-                    mock_tasks.append(new_task)
+                # Create tasks in DB
+                for task in kanban_data['kanban_tasks']:
+                    repo.create_task(
+                        project_id=1,
+                        title=task.get("title", "Untitled"),
+                        agent=task.get("agent", "SomaBot"),
+                        description=task.get("description", "")
+                    )
             
             return {"response": response_text}
             
@@ -163,36 +180,21 @@ async def chat_endpoint(request: ChatRequest, api_key: str = Depends(verify_api_
         # Don't expose internal error details to client in production
         raise HTTPException(status_code=500, detail="An internal error occurred. Please try again later.")
 
-# In-Memory Log Store
-agent_logs = []
-# In-Memory Ideation Store
-ideation_history = []
-
 @app.get("/ideation/history")
 def get_ideation_history():
-    return ideation_history
+    # Deprecated or move to DB if needed
+    return []
 
 # ... (inside chat_endpoint)
 @app.get("/tasks")
-def get_tasks():
-    return mock_tasks
-
-def log_event(agent: str, message: str):
-    timestamp = time.strftime("%H:%M:%S")
-    log_entry = {
-        "id": len(agent_logs) + 1,
-        "timestamp": timestamp,
-        "agent": agent,
-        "message": message
-    }
-    agent_logs.append(log_entry)
-    # Keep only last 100 logs
-    if len(agent_logs) > 100:
-        agent_logs.pop(0)
+def get_tasks(db = Depends(get_db)):
+    repo = TaskRepository(db)
+    return repo.get_tasks(project_id=1)
 
 @app.get("/logs")
-def get_logs():
-    return agent_logs
+def get_logs(db = Depends(get_db)):
+    repo = TaskRepository(db)
+    return repo.get_logs()
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 
@@ -200,107 +202,22 @@ from fastapi import FastAPI, HTTPException, BackgroundTasks
 
 # ... (previous code remains)
 
-def run_agent_task(task_id: int):
-    """Runs the agent execution in the background."""
-    print(f"🔄 Background Task Started for ID: {task_id}")
-    
-    # Re-find task (safest in case of race conditions, though mock_tasks is in-memory)
-    task = next((t for t in mock_tasks if t["id"] == task_id), None)
-    if not task:
-        log_event("Orchestrator", f"❌ Task #{task_id} not found in background worker.")
-        return
-
-    try:
-        # Define Logger Callback
-        def agent_logger(msg):
-            log_event(task["agent"], msg)
-
-        # Select Agent
-        result = "Agent not found"
-        if task["agent"] == "SomaFront":
-            result = soma_front.execute_task(f"{task['title']}: {task.get('description', '')}", log_callback=agent_logger)
-        elif task["agent"] == "SomaBack":
-            result = soma_back.execute_task(f"{task['title']}: {task.get('description', '')}", log_callback=agent_logger)
-        elif task["agent"] == "SomaQA":
-            result = soma_qa.execute_task(f"{task['title']}: {task.get('description', '')}", log_callback=agent_logger)
-        elif task["agent"] == "SomaOps":
-            result = soma_ops.execute_task(f"{task['title']}: {task.get('description', '')}", log_callback=agent_logger)
-        elif task["agent"] == "SomaDesign":
-            result = soma_design.execute_task(f"{task['title']}: {task.get('description', '')}", log_callback=agent_logger)
-        # New v2.0 Agents
-        elif task["agent"] == "SomaArch":
-            result = soma_arch.execute_task(f"{task['title']}: {task.get('description', '')}", log_callback=agent_logger)
-        elif task["agent"] == "SomaLead":
-            result = soma_lead.execute_task(f"{task['title']}: {task.get('description', '')}", log_callback=agent_logger)
-        elif task["agent"] == "SomaMobile":
-            result = soma_mobile.execute_task(f"{task['title']}: {task.get('description', '')}", log_callback=agent_logger)
-        elif task["agent"] == "SomaData":
-            result = soma_data.execute_task(f"{task['title']}: {task.get('description', '')}", log_callback=agent_logger)
-        elif task["agent"] == "SomaSec":
-            result = soma_sec.execute_task(f"{task['title']}: {task.get('description', '')}", log_callback=agent_logger)
-        elif task["agent"] == "SomaDocs":
-            result = soma_docs.execute_task(f"{task['title']}: {task.get('description', '')}", log_callback=agent_logger)
-        else:
-             log_event("Orchestrator", f"⚠️ Agent {task['agent']} not found. Defaulting to Orchestrator/Generic.")
-             result = f"Simulation: Task executed by {task['agent']}"
-            
-        
-        # Analyze Result for Errors (especially 429 Quota)
-        lower_result = str(result).lower()
-        
-        # 1. Critical Failure (Quota or Crash)
-        if "error" in lower_result and ("429" in lower_result or "quota" in lower_result):
-            task["status"] = "To Do"
-            log_event("Orchestrator", f"❌ Task #{task_id} Failed (Quota). Reverting to 'To Do'.")
-            
-        # 2. QA Feedback Loop (Self-Healing)
-        elif task["agent"] == "SomaQA" and ("failed" in lower_result or "fail" in lower_result):
-            # Mark QA as Done (it did its job: found a bug)
-            task["status"] = "Done"
-            log_event("SomaQA", f"🚫 TEST FAILED. Initiating Repair Protocol.")
-            
-            # Identify Culprit (Heuristic)
-            culprit_agent = "SomaBack"
-            if "component" in task["title"].lower() or "frontend" in task["title"].lower() or "ui" in task["title"].lower():
-                culprit_agent = "SomaFront"
-                
-            # Create Bugfix Task
-            new_id = len(mock_tasks) + 1
-            bugfix_task = {
-                "id": new_id,
-                "title": f"BUGFIX: {task['title']}",
-                "description": f"URGENT. QA Reported issues: {result[:200]}...",
-                "agent": culprit_agent,
-                "status": "To Do"
-            }
-            mock_tasks.append(bugfix_task)
-            log_event("Orchestrator", f"🚨 Auto-Created Task #{new_id} for {culprit_agent} to fix found bugs.")
-            
-        else:
-            # Update Status: Done
-            task["status"] = "Done"
-            log_event("Orchestrator", f"✅ Task #{task_id} Complete. Result: {result is not None}")
-        
-    except Exception as e:
-        task["status"] = "To Do" # Revert on failure
-        log_event("Orchestrator", f"❌ Execution Failed: {e}")
-        print(f"❌ Background Execution Failed: {e}")
+# run_agent_task moved to tasks.py for Celery execution
 
 @app.post("/execute/{task_id}")
-async def execute_task(task_id: int, background_tasks: BackgroundTasks, api_key: str = Depends(verify_api_key)):
-    # Find task
-    task = next((t for t in mock_tasks if t["id"] == task_id), None)
+async def execute_task(task_id: int, api_key: str = Depends(verify_api_key), db = Depends(get_db)):
+    repo = TaskRepository(db)
+    task = repo.get_task(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
     
-    # Update Status: In Progress IMMEDIATELY
-    task["status"] = "In Progress"
-    log_event("Orchestrator", f"🚀 Queuing Task #{task_id}: {task['title']}")
+    # Update Status
+    repo.update_task_status(task_id, "Queued")
     
-    # Add to background tasks (Non-blocking)
-    background_tasks.add_task(run_agent_task, task_id)
+    # Trigger Celery Task
+    run_agent_task.delay(task_id)
     
-    return {"status": "queued", "message": "Task started in background"}
+    return {"status": "queued", "message": "Task queued for execution (Celery)"}
 
 # =====================================
 # AIOS Rules Endpoint
@@ -354,4 +271,74 @@ def list_available_rules():
     return {
         "agents": list(AGENT_RULES_MAP.keys()),
         "total": len(AGENT_RULES_MAP)
+    }
+
+
+# ============== NEW CRUD ENDPOINTS ==============
+
+class TaskUpdate(BaseModel):
+    title: Optional[str] = None
+    description: Optional[str] = None
+
+class TaskReorder(BaseModel):
+    status: str
+    order_index: int
+
+@app.patch("/tasks/{task_id}")
+async def update_task(task_id: int, update: TaskUpdate, api_key: str = Depends(verify_api_key), db = Depends(get_db)):
+    """Update task title and/or description."""
+    repo = TaskRepository(db)
+    task = repo.update_task(task_id, title=update.title, description=update.description)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    return task
+
+@app.patch("/tasks/{task_id}/reorder")
+async def reorder_task(task_id: int, reorder: TaskReorder, api_key: str = Depends(verify_api_key), db = Depends(get_db)):
+    """Handle drag & drop reordering - update status and order."""
+    repo = TaskRepository(db)
+    
+    # Map status names
+    status_map = {
+        "todo": "To Do",
+        "in_progress": "In Progress", 
+        "done": "Done",
+        "failed": "Failed"
+    }
+    new_status = status_map.get(reorder.status, reorder.status)
+    
+    task = repo.reorder_task(task_id, new_status, reorder.order_index)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    return task
+
+@app.delete("/tasks/{task_id}")
+async def delete_task(task_id: int, api_key: str = Depends(verify_api_key), db = Depends(get_db)):
+    """Delete a task."""
+    repo = TaskRepository(db)
+    success = repo.delete_task(task_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Task not found")
+    return {"message": f"Task {task_id} deleted"}
+
+@app.get("/queue/status")
+async def get_queue_status():
+    """Get current task queue status."""
+    # TODO: Implement Redis Queue Status check if needed
+    return {"status": "active", "backend": "Celery+Redis"}
+
+@app.post("/queue/cancel/{task_id}")
+async def cancel_queued_task(task_id: int, api_key: str = Depends(verify_api_key)):
+    # Celery cancellation implementation required
+    return {"message": "Not implemented yet for Celery"}
+
+# Health check
+@app.get("/health")
+async def health_check():
+    """Health check endpoint."""
+    return {
+        "status": "healthy",
+        "version": "2.0.0",
+        "agents_loaded": 12,
+        "timestamp": datetime.now().isoformat()
     }

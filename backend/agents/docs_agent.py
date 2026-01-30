@@ -1,158 +1,78 @@
-"""
-SomaDocs - The Documentation Agent
-AIOS Role: Technical Writer & Scribe
-"""
 import os
 import re
 import pathlib
-import google.generativeai as genai
+from openai import OpenAI
 from dotenv import load_dotenv
 
 load_dotenv()
 
 SYSTEM_PROMPT = """
 # IDENTITY
-Você é **SomaDocs**, o Escriba Técnico do SomaDev.
-Você é o "The Scribe" - transforma código em documentação clara.
-
-# YOUR PHILOSOPHY: "IF IT'S NOT DOCUMENTED, IT DOESN'T EXIST"
-- Você escreve READMEs que fazem desenvolvedores felizes.
-- Você documenta APIs de forma que qualquer um entenda.
-- Você cria guias de contribuição e onboarding.
-- Você mantém a documentação sincronizada com o código.
-
-# RESPONSIBILITIES
-1. **README:** Criar/atualizar README.md com setup, uso e contribuição.
-2. **API Docs:** Documentar endpoints com exemplos de request/response.
-3. **Changelog:** Manter CHANGELOG.md atualizado.
-4. **Technical Guides:** Criar guias de arquitetura e decisões.
-5. **User Manuals:** Documentação para usuários finais.
-6. **Inline Comments:** Sugerir comentários em código complexo.
-
-# DOCUMENTATION TEMPLATES
-
-## README Template
-```markdown
-# Project Name
-
-Brief description.
-
-## Features
-- Feature 1
-- Feature 2
-
-## Quick Start
-```bash
-npm install
-npm run dev
-```
-
-## Configuration
-| Variable | Description | Default |
-|----------|-------------|---------|
-| API_KEY | ... | - |
-
-## API Reference
-...
-
-## Contributing
-...
-
-## License
-...
-```
-
-## API Endpoint Template
-```markdown
-### GET /api/users
-
-Returns a list of users.
-
-**Parameters:**
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| limit | number | No | Max results |
-
-**Response:**
-```json
-{
-  "users": [...]
-}
-```
-```
+Você é **SomaDocs**, o Technical Writer do ecossistema SomaDev.
+Responsabilidade: Gerar READMEs, documentação de API, guias de uso.
 
 # OUTPUT FORMAT (STRICT)
-
-**FILE: [caminho/relativo/do/arquivo.md]**
+**FILE: [caminho/arquivo.md]**
 ```markdown
-# Conteúdo aqui
+// conteúdo
 ```
-
-# COLLABORATION
-- Você reporta para **SARA** (Product Manager)
-- Você documenta o trabalho de TODOS os agentes
 """
 
-ALLOWED_EXTENSIONS = {'.md', '.mdx', '.txt', '.json', '.yaml', '.yml'}
+ALLOWED_EXTENSIONS = {'.md', '.txt', '.json'}
 
 class DocsAgent:
     def __init__(self, api_key: str = None):
-        self.api_key = api_key or os.getenv("GEMINI_API_KEY")
+        self.api_key = api_key or os.getenv("OPENAI_API_KEY")
+        self.client = None
+        self.model_name = "gpt-5.2"
+        
         if self.api_key:
-            genai.configure(api_key=self.api_key)
-            self.model = genai.GenerativeModel('gemini-2.0-flash')
-            self.base_path = pathlib.Path(os.getenv("SOMADEV_WORKSPACE_PATH", "./backend/workspace")).resolve()
+            try:
+                self.client = OpenAI(api_key=self.api_key)
+                print(f"✅ SomaDocs initialized")
+            except Exception as e:
+                print(f"❌ SomaDocs failed: {e}")
+        
+        self.base_path = pathlib.Path("./docs").resolve()
     
     def save_file(self, relative_path: str, content: str, log_callback=None):
-        """Safely save a file with path traversal protection."""
         base = self.base_path.resolve()
-        clean_path = relative_path.strip().lstrip('./')
-        full_path = (base / clean_path).resolve()
+        os.makedirs(base, exist_ok=True)
+        full_path = (base / relative_path.strip().lstrip('./')).resolve()
         
         if not str(full_path).startswith(str(base)):
-            msg = f"🚫 Security: Path traversal attempt blocked: {relative_path}"
-            print(msg)
-            if log_callback: log_callback(msg)
-            raise ValueError(f"Path traversal attempt detected: {relative_path}")
+            raise ValueError("Path traversal blocked")
         
-        ext = full_path.suffix.lower()
-        if ext not in ALLOWED_EXTENSIONS:
-            msg = f"🚫 Security: Blocked file with disallowed extension: {ext}"
-            print(msg)
-            if log_callback: log_callback(msg)
-            raise ValueError(f"File extension not allowed: {ext}")
-        
-        os.makedirs(os.path.dirname(full_path), exist_ok=True)
+        os.makedirs(os.path.dirname(full_path) if os.path.dirname(full_path) else ".", exist_ok=True)
         with open(full_path, "w", encoding="utf-8") as f:
             f.write(content)
-        msg = f"📝 SomaDocs Saved: {full_path}"
-        print(msg)
-        if log_callback: log_callback(msg)
+        if log_callback: log_callback(f"📄 Saved: {full_path}")
 
     def execute_task(self, task_description: str, log_callback=None) -> str:
-        if not self.model:
-            return "Error: Gemini API Key not configured."
+        if not self.client:
+            return "Error: API Key not configured."
         
         msg = f"📝 SomaDocs working on: {task_description}"
-        print(msg)
         if log_callback: log_callback(msg)
         
         try:
-            prompt = f"{SYSTEM_PROMPT}\n\nTASK: {task_description}\n\nGenerate the necessary documentation now."
-            response = self.model.generate_content(prompt)
-            text = response.text
-            
+            response = self.client.chat.completions.create(
+                model=self.model_name,
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": f"TASK: {task_description}"}
+                ],
+                temperature=0.7
+            )
+            text = response.choices[0].message.content
             files = re.findall(r"\*\*FILE: (.*?)\*\*\n```(?:markdown|md)?\n(.*?)```", text, re.DOTALL)
             
             if not files:
-                return f"SomaDocs completed. Output:\n{text[:500]}..."
+                return f"SomaDocs Complete: {text[:300]}..."
 
-            generated_files = []
             for filename, content in files:
                 self.save_file(filename.strip(), content.strip(), log_callback)
-                generated_files.append(filename)
                 
-            return f"SomaDocs Successfully Created: {', '.join(generated_files)}"
-
+            return f"SomaDocs Created: {len(files)} files"
         except Exception as e:
-            return f"SomaDocs Execution Error: {str(e)}"
+            return f"SomaDocs Error: {str(e)}"

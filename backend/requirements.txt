@@ -10,3 +10,18 @@ watchdog
 httpx
 python-socketio[asyncio]
 aiofiles
+# Database
+psycopg2-binary
+sqlalchemy
+
+# Caching & Queue
+redis
+celery
+
+# Monitoring
+prometheus-fastapi-instrumentator
+
+# AI & API
+openai
+google-generativeai
+

@@ -1,141 +1,155 @@
-/**
- * useWebSocket Hook - Socket.IO connection for real-time preview updates
- */
 'use client'
 
-import { useEffect, useRef, useState, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
+import { toast } from 'sonner'
 
-// Types
-interface FileChangeEvent {
-  path: string
-  content: string
-  timestamp?: number
-}
-
-interface BuildErrorEvent {
-  message: string
-  stack: string
+interface WebSocketMessage {
+  type: string
+  [key: string]: any
 }
 
 interface UseWebSocketOptions {
-  projectId: string
-  onFileChange?: (data: FileChangeEvent) => void
+  url?: string
+  projectId?: string
+  onFileChange?: (data: { path: string; content: string }) => void
   onBuildComplete?: () => void
-  onBuildError?: (error: BuildErrorEvent) => void
+  onBuildError?: (error: { message: string; stack: string }) => void
+  onMessage?: (message: WebSocketMessage) => void
+  reconnectInterval?: number
+  maxReconnectAttempts?: number
 }
 
-interface UseWebSocketReturn {
-  isConnected: boolean
-  joinPreview: () => void
-  leavePreview: () => void
-}
+export function useWebSocket(options: UseWebSocketOptions) {
+  const {
+    url = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000/ws',
+    projectId,
+    onFileChange,
+    onBuildComplete,
+    onBuildError,
+    onMessage,
+    reconnectInterval = 3000,
+    maxReconnectAttempts = 10
+  } = options
 
-// Socket.IO client (dynamically imported to avoid SSR issues)
-let io: any = null
-
-export const useWebSocket = ({
-  projectId,
-  onFileChange,
-  onBuildComplete,
-  onBuildError
-}: UseWebSocketOptions): UseWebSocketReturn => {
   const [isConnected, setIsConnected] = useState(false)
-  const socketRef = useRef<any>(null)
-  const wsUrl = process.env.NEXT_PUBLIC_WS_URL || 'http://localhost:8000'
+  const [reconnectAttempts, setReconnectAttempts] = useState(0)
+  const wsRef = useRef<WebSocket | null>(null)
+  const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null)
 
-  // Initialize socket connection
-  useEffect(() => {
-    const initSocket = async () => {
-      if (!io) {
-        const socketIo = await import('socket.io-client')
-        io = socketIo.io
-      }
+  const connect = useCallback(() => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) return
 
-      socketRef.current = io(wsUrl, {
-        transports: ['websocket', 'polling'],
-        reconnection: true,
-        reconnectionDelay: 1000,
-        reconnectionAttempts: 10,
-        timeout: 20000
-      })
+    const wsUrl = projectId ? `${url}?project_id=${projectId}` : url
 
-      socketRef.current.on('connect', () => {
-        console.log('✅ WebSocket connected')
+    try {
+      const ws = new WebSocket(wsUrl)
+      wsRef.current = ws
+
+      ws.onopen = () => {
         setIsConnected(true)
-      })
-
-      socketRef.current.on('disconnect', () => {
-        console.log('❌ WebSocket disconnected')
-        setIsConnected(false)
-      })
-
-      socketRef.current.on('connect_error', (err: Error) => {
-        console.error('WebSocket connection error:', err.message)
-        setIsConnected(false)
-      })
-
-      // Event handlers
-      socketRef.current.on('file_changed', (data: FileChangeEvent) => {
-        console.log('🔥 Hot reload:', data.path)
-        onFileChange?.(data)
-      })
-
-      socketRef.current.on('build_complete', () => {
-        console.log('✅ Build complete')
-        onBuildComplete?.()
-      })
-
-      socketRef.current.on('build_error', (error: BuildErrorEvent) => {
-        console.error('❌ Build error:', error.message)
-        onBuildError?.(error)
-      })
-
-      socketRef.current.on('joined', (data: { room: string }) => {
-        console.log('👤 Joined room:', data.room)
-      })
-    }
-
-    initSocket()
-
-    return () => {
-      if (socketRef.current) {
-        socketRef.current.disconnect()
+        setReconnectAttempts(0)
+        console.log('✅ WebSocket connected')
+        toast.success('Connected to server', { duration: 2000 })
       }
-    }
-  }, [wsUrl, onFileChange, onBuildComplete, onBuildError])
 
-  // Join preview room
-  const joinPreview = useCallback(() => {
-    if (socketRef.current && isConnected) {
-      socketRef.current.emit('join_preview', { project_id: projectId })
-    }
-  }, [projectId, isConnected])
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data) as WebSocketMessage
 
-  // Leave preview room
-  const leavePreview = useCallback(() => {
-    if (socketRef.current && isConnected) {
-      socketRef.current.emit('leave_preview', { project_id: projectId })
-    }
-  }, [projectId, isConnected])
+          // Handle specific message types
+          switch (data.type) {
+            case 'FILE_CHANGE':
+              onFileChange?.(data as any)
+              break
+            case 'BUILD_COMPLETE':
+              onBuildComplete?.()
+              toast.success('Build complete!')
+              break
+            case 'BUILD_ERROR':
+              onBuildError?.(data as any)
+              toast.error(`Build error: ${data.message}`)
+              break
+            case 'TASK_UPDATE':
+              toast.info(`Task ${data.taskId}: ${data.status}`)
+              break
+            default:
+              onMessage?.(data)
+          }
+        } catch (e) {
+          console.error('WebSocket message parse error:', e)
+        }
+      }
 
-  // Auto-join when connected
+      ws.onerror = (error) => {
+        console.error('WebSocket error:', error)
+      }
+
+      ws.onclose = (event) => {
+        setIsConnected(false)
+        wsRef.current = null
+
+        if (!event.wasClean && reconnectAttempts < maxReconnectAttempts) {
+          console.log(`🔄 Reconnecting... (attempt ${reconnectAttempts + 1}/${maxReconnectAttempts})`)
+
+          // Exponential backoff
+          const delay = Math.min(reconnectInterval * Math.pow(2, reconnectAttempts), 30000)
+
+          reconnectTimeoutRef.current = setTimeout(() => {
+            setReconnectAttempts(prev => prev + 1)
+            connect()
+          }, delay)
+        } else if (reconnectAttempts >= maxReconnectAttempts) {
+          toast.error('Connection lost. Please refresh the page.')
+        }
+      }
+    } catch (error) {
+      console.error('WebSocket connection failed:', error)
+    }
+  }, [url, projectId, onFileChange, onBuildComplete, onBuildError, onMessage, reconnectInterval, maxReconnectAttempts, reconnectAttempts])
+
+  const disconnect = useCallback(() => {
+    if (reconnectTimeoutRef.current) {
+      clearTimeout(reconnectTimeoutRef.current)
+    }
+    if (wsRef.current) {
+      wsRef.current.close(1000, 'Client disconnect')
+      wsRef.current = null
+    }
+    setIsConnected(false)
+    setReconnectAttempts(0)
+  }, [])
+
+  const send = useCallback((data: WebSocketMessage) => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify(data))
+    } else {
+      console.warn('WebSocket not connected, cannot send message')
+    }
+  }, [])
+
+  // Auto-connect on mount
   useEffect(() => {
-    if (isConnected && projectId) {
-      joinPreview()
-    }
-    
-    return () => {
-      if (isConnected && projectId) {
-        leavePreview()
+    connect()
+    return () => disconnect()
+  }, [connect, disconnect])
+
+  // Visibility change handler - reconnect when tab becomes visible
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible' && !isConnected) {
+        connect()
       }
     }
-  }, [isConnected, projectId, joinPreview, leavePreview])
+
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange)
+  }, [connect, isConnected])
 
   return {
     isConnected,
-    joinPreview,
-    leavePreview
+    reconnectAttempts,
+    connect,
+    disconnect,
+    send
   }
 }
-
-export default useWebSocket

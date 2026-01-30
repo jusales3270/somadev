@@ -1,0 +1,185 @@
+/* Mobile-first responsive utilities for SomaDev */
+
+/* ============================================
+   RESPONSIVE BREAKPOINTS
+   - sm: 640px
+   - md: 768px
+   - lg: 1024px
+   - xl: 1280px
+   ============================================ */
+
+/* Mobile Navigation */
+@media (max-width: 767px) {
+  /* Hide sidebar on mobile */
+  .sidebar-desktop {
+    display: none;
+  }
+
+  /* Mobile menu button */
+  .mobile-menu-btn {
+    display: flex;
+  }
+
+  /* Full-width cards on mobile */
+  .kanban-grid {
+    grid-template-columns: 1fr !important;
+    gap: 1rem;
+  }
+
+  /* Stack card actions vertically */
+  .card-actions {
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  /* Smaller text on mobile */
+  .text-responsive {
+    font-size: 0.875rem;
+  }
+
+  /* Hide overflow text */
+  .hide-on-mobile {
+    display: none;
+  }
+
+  /* Full-width modals */
+  .modal-responsive {
+    width: 100% !important;
+    max-width: 100% !important;
+    margin: 0;
+    border-radius: 1rem 1rem 0 0;
+  }
+
+  /* Bottom sheet style for modals */
+  .modal-container {
+    align-items: flex-end;
+  }
+}
+
+/* Tablet adjustments */
+@media (min-width: 768px) and (max-width: 1023px) {
+  .kanban-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .sidebar-compact {
+    width: 5rem;
+  }
+
+  .sidebar-compact .sidebar-label {
+    display: none;
+  }
+}
+
+/* Desktop */
+@media (min-width: 1024px) {
+  .mobile-menu-btn {
+    display: none;
+  }
+
+  .kanban-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+/* ============================================
+   RESPONSIVE COMPONENTS
+   ============================================ */
+
+/* Progress bar responsive */
+.progress-container {
+  padding: 1rem;
+}
+
+@media (min-width: 768px) {
+  .progress-container {
+    padding: 1.5rem;
+  }
+}
+
+/* Card responsive sizing */
+.task-card {
+  padding: 0.75rem;
+}
+
+@media (min-width: 768px) {
+  .task-card {
+    padding: 1rem;
+  }
+}
+
+/* Chat input responsive */
+.chat-input-container {
+  padding: 0.75rem;
+}
+
+@media (min-width: 768px) {
+  .chat-input-container {
+    padding: 1rem 1.5rem;
+  }
+}
+
+/* ============================================
+   TOUCH IMPROVEMENTS
+   ============================================ */
+
+/* Larger touch targets on mobile */
+@media (max-width: 767px) {
+  button,
+  a,
+  .touchable {
+    min-height: 44px;
+    min-width: 44px;
+  }
+
+  /* Spacing for touch */
+  .touch-spacing > * + * {
+    margin-top: 0.5rem;
+  }
+}
+
+/* ============================================
+   SAFE AREA INSETS (for notch devices)
+   ============================================ */
+
+.safe-area-bottom {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+.safe-area-top {
+  padding-top: env(safe-area-inset-top);
+}
+
+/* ============================================
+   SCROLLING
+   ============================================ */
+
+/* Better touch scrolling */
+.scroll-touch {
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+}
+
+/* Hide scrollbars on mobile */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* ============================================
+   ANIMATIONS - reduced motion support
+   ============================================ */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

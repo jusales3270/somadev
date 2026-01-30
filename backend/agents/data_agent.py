@@ -1,128 +1,78 @@
-"""
-SomaData - The Data Engineer Agent
-AIOS Rule: .cursor/rules/agents/data-engineer.md
-"""
 import os
 import re
 import pathlib
-import google.generativeai as genai
+from openai import OpenAI
 from dotenv import load_dotenv
 
 load_dotenv()
 
 SYSTEM_PROMPT = """
 # IDENTITY
-Você é **SomaData**, o Engenheiro de Dados do SomaDev.
-Você é o "Data Weaver" - especialista em modelagem e manipulação de dados.
-
-# YOUR PHILOSOPHY: "DATA IS THE FOUNDATION"
-- Você projeta schemas de banco de dados eficientes.
-- Você escreve migrations seguras e reversíveis.
-- Você otimiza queries para performance.
-- Você garante integridade e consistência dos dados.
-
-# TECH STACK
-- **SQL:** PostgreSQL, MySQL, SQLite
-- **NoSQL:** MongoDB, Redis
-- **ORM:** Prisma, Drizzle, SQLAlchemy
-- **Migrations:** Up/Down migrations
-- **Supabase:** Auth, RLS Policies, Edge Functions
-
-# RESPONSIBILITIES
-1. **Schema Design:** Modelar tabelas, relacionamentos e índices.
-2. **Migrations:** Criar migrations versionadas.
-3. **Queries:** Otimizar consultas complexas.
-4. **RLS Policies:** Definir políticas de segurança em nível de linha.
-5. **Seed Data:** Criar dados de teste e fixtures.
-
-# CODING RULES
-1. **Normalize First:** 3NF padrão, desnormalize apenas por performance comprovada.
-2. **Index Wisely:** Índices para chaves estrangeiras e colunas de busca.
-3. **Soft Delete:** Prefira soft delete (deleted_at) a hard delete.
-4. **Audit Trail:** created_at, updated_at em todas as tabelas.
-5. **UUID vs Serial:** UUID para IDs expostos, serial para interno.
+Você é **SomaData**, o Data Engineer do ecossistema SomaDev.
+Responsabilidade: Schema de banco de dados, migrations, queries otimizadas.
 
 # OUTPUT FORMAT (STRICT)
-
-**FILE: [caminho/relativo/do/arquivo.sql]**
-```sql
--- migration code here
+**FILE: [caminho/arquivo.sql ou .py]**
+```sql ou python
+// código
 ```
-
-Ou para schema:
-**FILE: [caminho/relativo/schema.prisma]**
-```prisma
-model User {
-  ...
-}
-```
-
-# COLLABORATION
-- Você reporta para **SomaLead** (Tech Lead)
-- **SomaBack** consome seus schemas
-- **SomaSec** valida suas políticas RLS
 """
 
-ALLOWED_EXTENSIONS = {'.sql', '.prisma', '.py', '.json', '.yaml', '.yml', '.md', '.ts'}
+ALLOWED_EXTENSIONS = {'.sql', '.py', '.json', '.md'}
 
 class DataAgent:
     def __init__(self, api_key: str = None):
-        self.api_key = api_key or os.getenv("GEMINI_API_KEY")
+        self.api_key = api_key or os.getenv("OPENAI_API_KEY")
+        self.client = None
+        self.model_name = "gpt-5.2"
+        
         if self.api_key:
-            genai.configure(api_key=self.api_key)
-            self.model = genai.GenerativeModel('gemini-2.0-flash')
-            self.base_path = pathlib.Path(os.getenv("SOMADEV_WORKSPACE_PATH", "./backend/workspace")).resolve()
+            try:
+                self.client = OpenAI(api_key=self.api_key)
+                print(f"✅ SomaData initialized")
+            except Exception as e:
+                print(f"❌ SomaData failed: {e}")
+        
+        self.base_path = pathlib.Path("./backend/database").resolve()
     
     def save_file(self, relative_path: str, content: str, log_callback=None):
-        """Safely save a file with path traversal protection."""
         base = self.base_path.resolve()
-        clean_path = relative_path.strip().lstrip('./')
-        full_path = (base / clean_path).resolve()
+        os.makedirs(base, exist_ok=True)
+        full_path = (base / relative_path.strip().lstrip('./')).resolve()
         
         if not str(full_path).startswith(str(base)):
-            msg = f"🚫 Security: Path traversal attempt blocked: {relative_path}"
-            print(msg)
-            if log_callback: log_callback(msg)
-            raise ValueError(f"Path traversal attempt detected: {relative_path}")
-        
-        ext = full_path.suffix.lower()
-        if ext not in ALLOWED_EXTENSIONS:
-            msg = f"🚫 Security: Blocked file with disallowed extension: {ext}"
-            print(msg)
-            if log_callback: log_callback(msg)
-            raise ValueError(f"File extension not allowed: {ext}")
+            raise ValueError("Path traversal blocked")
         
         os.makedirs(os.path.dirname(full_path), exist_ok=True)
         with open(full_path, "w", encoding="utf-8") as f:
             f.write(content)
-        msg = f"🗄️ SomaData Saved: {full_path}"
-        print(msg)
-        if log_callback: log_callback(msg)
+        if log_callback: log_callback(f"💾 Saved: {full_path}")
 
     def execute_task(self, task_description: str, log_callback=None) -> str:
-        if not self.model:
-            return "Error: Gemini API Key not configured."
+        if not self.client:
+            return "Error: API Key not configured."
         
         msg = f"🗄️ SomaData working on: {task_description}"
-        print(msg)
         if log_callback: log_callback(msg)
         
         try:
-            prompt = f"{SYSTEM_PROMPT}\n\nTASK: {task_description}\n\nGenerate the necessary database files now."
-            response = self.model.generate_content(prompt)
-            text = response.text
-            
-            files = re.findall(r"\*\*FILE: (.*?)\*\*\n```(?:sql|prisma|python|typescript)?\n(.*?)```", text, re.DOTALL)
+            response = self.client.chat.completions.create(
+                model=self.model_name,
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": f"TASK: {task_description}"}
+                ],
+                temperature=0.7
+            )
+            text = response.choices[0].message.content
+            files = re.findall(r"\*\*FILE: (.*?)\*\*\n```(?:sql|python)?\n(.*?)```", text, re.DOTALL)
             
             if not files:
-                return f"SomaData analysis complete. Output:\n{text[:500]}..."
+                return f"SomaData Complete: {text[:300]}..."
 
-            generated_files = []
             for filename, content in files:
                 self.save_file(filename.strip(), content.strip(), log_callback)
-                generated_files.append(filename)
                 
-            return f"SomaData Successfully Created: {', '.join(generated_files)}"
-
+            return f"SomaData Created: {len(files)} files"
         except Exception as e:
-            return f"SomaData Execution Error: {str(e)}"
+            return f"SomaData Error: {str(e)}"

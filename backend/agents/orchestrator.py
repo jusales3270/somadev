@@ -1,5 +1,5 @@
 import os
-import google.generativeai as genai
+from openai import OpenAI
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -100,68 +100,61 @@ Comece agora. Apresente-se de forma curta (3 linhas máx) e faça a primeira per
 
 class OrchestratorAgent:
     def __init__(self, api_key: str = None):
-        self.api_key = api_key or os.getenv("GEMINI_API_KEY")
+        self.api_key = api_key or os.getenv("OPENAI_API_KEY")
         if not self.api_key:
-            print("WARNING: GEMINI_API_KEY not found in environment variables.")
+            print("WARNING: OPENAI_API_KEY not found in environment variables.")
+        
+        self.client = None
+        self.model_name = "gpt-5.2"  # OpenAI GPT-5.2
+        self.messages = []
         
         if self.api_key:
-            genai.configure(api_key=self.api_key)
-            
-            # List of models to try in order of preference
-            candidate_models = [
-                'models/gemini-3-flash-preview',
-                'gemini-3-flash-preview',
-                'gemini-2.0-flash',
-                'models/gemini-2.0-flash',
-                'gemini-1.5-flash',
-                'gemini-pro'
-            ]
-            
-            self.model = None
-            self.chat_session = None
-
-            for model_name in candidate_models:
-                try:
-                    print(f"Attempting to initialize model: {model_name}")
-                    model = genai.GenerativeModel(model_name)
-                    # Test validity by starting chat
-                    chat = model.start_chat(history=[
-                        {"role": "user", "parts": [SYSTEM_PROMPT]},
-                        {"role": "model", "parts": ["Entendido. Sou SARA, a orquestradora do SomaDev. Estou pronta."]}
-                    ])
-                    self.model = model
-                    self.chat_session = chat
-                    print(f"Successfully initialized model: {model_name}")
-                    break
-                except Exception as e:
-                    print(f"Failed to initialize {model_name}: {e}")
-            
-            if not self.model:
-                 print("CRITICAL: Could not initialize ANY Gemini model.")
-        else:
-            self.model = None
-            self.chat_session = None
+            try:
+                self.client = OpenAI(api_key=self.api_key)
+                print(f"✅ OpenAI client initialized with model: {self.model_name}")
+                
+                # Initialize conversation with system prompt
+                self.messages = [
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "assistant", "content": "Olá. Sou SARA, a arquiteta do sistema. O que vamos construir hoje?"}
+                ]
+            except Exception as e:
+                print(f"❌ Failed to initialize OpenAI client: {e}")
+                self.client = None
 
     def get_history(self):
-        if not self.chat_session:
+        """Returns conversation history in format compatible with frontend"""
+        if not self.messages:
             return []
         
-        # Convert Gemini Content objects to simple dicts
         history = []
-        for content in self.chat_session.history:
-            role = "user" if content.role == "user" else "ai"
-            text = content.parts[0].text
-            # Skip hidden system prompt if possible, or frontend filters it
-            history.append({"role": role, "text": text})
+        for msg in self.messages:
+            if msg["role"] == "system":
+                continue  # Skip system prompt
+            role = "user" if msg["role"] == "user" else "ai"
+            history.append({"role": role, "text": msg["content"]})
         return history
 
     async def process_message(self, user_message: str) -> dict:
-        if not self.chat_session:
-            return {"text": "Error: Gemini API key not configured or model initialization failed.", "kanban_data": None}
+        if not self.client:
+            return {"text": "Error: OpenAI API key not configured.", "kanban_data": None}
         
         try:
-            response = self.chat_session.send_message(user_message)
-            response_text = response.text
+            # Add user message to history
+            self.messages.append({"role": "user", "content": user_message})
+            
+            # Call OpenAI API
+            response = self.client.chat.completions.create(
+                model=self.model_name,
+                messages=self.messages,
+                temperature=0.7
+            )
+            
+            response_text = response.choices[0].message.content
+            
+            # Add assistant response to history
+            self.messages.append({"role": "assistant", "content": response_text})
+            
             kanban_data = None
             
             # Check for JSON command block (Soma-Flow Phase 4)
@@ -172,10 +165,11 @@ class OrchestratorAgent:
                         json_str = json_match.group(1)
                         kanban_data = json.loads(json_str)
                         print(f"🔹 SARA Generated Kanban Plan: {kanban_data.get('project_name', 'Unnamed Project')}")
-                        # Future: Save to DB or trigger Sub-agents
                 except Exception as e:
                     print(f"⚠️ Error parsing SARA JSON: {e}")
 
             return {"text": response_text, "kanban_data": kanban_data}
         except Exception as e:
-            return {"text": f"Error processing message: {str(e)}", "kanban_data": None}
+            error_msg = str(e)
+            print(f"❌ OpenAI API Error: {error_msg}")
+            return {"text": f"Error processing message: {error_msg}", "kanban_data": None}

@@ -1,7 +1,7 @@
 import os
 import re
 import pathlib
-import google.generativeai as genai
+from openai import OpenAI
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -47,12 +47,19 @@ ALLOWED_EXTENSIONS = {'.tsx', '.ts', '.css', '.js', '.jsx', '.json', '.md'}
 
 class FrontendAgent:
     def __init__(self, api_key: str = None):
-        self.api_key = api_key or os.getenv("GEMINI_API_KEY")
+        self.api_key = api_key or os.getenv("OPENAI_API_KEY")
+        self.client = None
+        self.model_name = "gpt-5.2"
+        
         if self.api_key:
-            genai.configure(api_key=self.api_key)
-            self.model = genai.GenerativeModel('gemini-2.0-flash') 
-            # Use environment variable or relative path instead of hardcoded path
-            self.base_path = pathlib.Path(os.getenv("SOMADEV_FRONTEND_PATH", "./frontend/src")).resolve()
+            try:
+                self.client = OpenAI(api_key=self.api_key)
+                print(f"✅ SomaFront initialized with {self.model_name}")
+            except Exception as e:
+                print(f"❌ SomaFront failed to initialize: {e}")
+        
+        # Use environment variable or relative path instead of hardcoded path
+        self.base_path = pathlib.Path(os.getenv("SOMADEV_FRONTEND_PATH", "./frontend/src")).resolve()
     
     def save_file(self, relative_path: str, content: str, log_callback=None):
         """Safely save a file with path traversal protection."""
@@ -60,7 +67,7 @@ class FrontendAgent:
         base = self.base_path.resolve()
         
         # Sanitize the relative path - remove any leading slashes or dots
-        clean_path = relative_path.strip().lstrip('./\\')
+        clean_path = relative_path.strip().lstrip('./')
         full_path = (base / clean_path).resolve()
         
         # Security: Ensure the path is within base directory (prevent path traversal)
@@ -86,30 +93,44 @@ class FrontendAgent:
         if log_callback: log_callback(msg)
 
     def execute_task(self, task_description: str, log_callback=None) -> str:
-        if not self.model:
-            return "Error: Gemini API Key not configured."
+        if not self.client:
+            return "Error: OpenAI API Key not configured."
         
         msg = f"🎨 SomaFront working on: {task_description}"
         print(msg)
         if log_callback: log_callback(msg)
         
         try:
-            prompt = f"{SYSTEM_PROMPT}\n\nTASK: {task_description}\n\nGenerate the necessary files now."
-            response = self.model.generate_content(prompt)
-            text = response.text
+            messages = [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": f"TASK: {task_description}\n\nGenerate the necessary files now."}
+            ]
+            
+            response = self.client.chat.completions.create(
+                model=self.model_name,
+                messages=messages,
+                temperature=0.7
+            )
+            
+            text = response.choices[0].message.content
+            
+            if log_callback: log_callback(f"📝 Generated response: {len(text)} characters")
             
             # Regex Parsing for Files
             files = re.findall(r"\*\*FILE: (.*?)\*\*\n```(?:tsx|ts|css|javascript|typescript)?\n(.*?)```", text, re.DOTALL)
             
             if not files:
-                 return f"SomaFront failed to generate files. Raw output available in logs."
+                return f"SomaFront failed to generate files. Raw output: {text[:500]}..."
 
             generated_files = []
             for filename, content in files:
                 self.save_file(filename.strip(), content.strip(), log_callback)
-                generated_files.append(filename)
+                generated_files.append(filename.strip())
                 
             return f"SomaFront Successfully Created: {', '.join(generated_files)}"
 
         except Exception as e:
-            return f"SomaFront Execution Error: {str(e)}"
+            error_msg = f"SomaFront Execution Error: {str(e)}"
+            print(error_msg)
+            if log_callback: log_callback(error_msg)
+            return error_msg

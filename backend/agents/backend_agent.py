@@ -1,25 +1,27 @@
 import os
 import re
 import pathlib
-import google.generativeai as genai
+from openai import OpenAI
 from dotenv import load_dotenv
 
 load_dotenv()
 
 SYSTEM_PROMPT = """
 # IDENTITY
-Você é **SomaBack**, o especialista em Backend e Engenharia de Dados do ecossistema SomaDev.
-Sua missão é garantir que a "magia" do frontend tenha alicerces de aço. Segurança, Escalabilidade e Performance são seus pilares.
+Você é **SomaBack**, o especialista em Backend do ecossistema SomaDev.
+Sua responsabilidade é traduzir as especificações da Sara (Orchestrator) em APIs Python/FastAPI robustas e seguras.
 
-# YOUR PHILOSOPHY: "THE LOGIC SENTINEL"
-- Você despreza código "espaguete". Tudo deve ser modular, tipado (Python Type Hints) e documentado.
-- Stack Padrão: Python 3.10+, FastAPI, Pydantic, Supabase (PostgreSQL).
+# YOUR ESTHETIC: "THE LOGIC SENTINEL"
+- Você escreve código limpo, bem documentado e testável.
+- Você é obcecado por segurança, validação de input e tratamento de erros.
+- Stack Padrão: FastAPI, Pydantic, SQLAlchemy (se BD), python-dotenv.
 
 # CODING RULES
-1.  **Async First:** Use `async def` para tudo que for I/O bound.
-2.  **Pydantic Models:** Valide TUDO que entra e sai da API.
-3.  **Error Handling:** Seus endpoints nunca retornam 500 sem tratamento. Use `try/except` e retorne `HTTPException`.
-4.  **Security:** CORS configurado apenas para origens confiáveis (em prod), JWT para auth, Hash para senhas.
+1.  **Type Hints:** Use sempre type hints em funções e variáveis.
+2.  **Pydantic Models:** Use Pydantic para request/response bodies.
+3.  **Docstrings:** Toda função pública tem docstring.
+4.  **Error Handling:** Use try/except com HTTPException(status_code, detail).
+5.  **Segurança:** Nunca exponha stack traces, sanitize inputs.
 
 # OUTPUT FORMAT (STRICT)
 
@@ -30,45 +32,39 @@ Para cada arquivo que você criar, use o seguinte formato EXATO:
 # código aqui
 ```
 
-Exemplo:
-**FILE: app/models/user.py**
-```python
-from pydantic import BaseModel
-...
-```
-
 Se precisar criar múltiplos arquivos, repita o padrão.
 """
 
 # Allowed file extensions for security
-ALLOWED_EXTENSIONS = {'.py', '.json', '.yaml', '.yml', '.toml', '.txt', '.md', '.sql'}
+ALLOWED_EXTENSIONS = {'.py', '.json', '.yml', '.yaml', '.md', '.txt', '.sql'}
 
 class BackendAgent:
     def __init__(self, api_key: str = None):
-        self.api_key = api_key or os.getenv("GEMINI_API_KEY")
+        self.api_key = api_key or os.getenv("OPENAI_API_KEY")
+        self.client = None
+        self.model_name = "gpt-5.2"
+        
         if self.api_key:
-            genai.configure(api_key=self.api_key)
-            self.model = genai.GenerativeModel('gemini-2.0-flash')
-            # Use environment variable or relative path instead of hardcoded path
-            self.base_path = pathlib.Path(os.getenv("SOMADEV_BACKEND_PATH", "./backend")).resolve()
-
+            try:
+                self.client = OpenAI(api_key=self.api_key)
+                print(f"✅ SomaBack initialized with {self.model_name}")
+            except Exception as e:
+                print(f"❌ SomaBack failed to initialize: {e}")
+        
+        self.base_path = pathlib.Path(os.getenv("SOMADEV_BACKEND_PATH", "./backend")).resolve()
+    
     def save_file(self, relative_path: str, content: str, log_callback=None):
         """Safely save a file with path traversal protection."""
-        # Resolve the full path
         base = self.base_path.resolve()
-        
-        # Sanitize the relative path - remove any leading slashes or dots
-        clean_path = relative_path.strip().lstrip('./\\')
+        clean_path = relative_path.strip().lstrip('./')
         full_path = (base / clean_path).resolve()
         
-        # Security: Ensure the path is within base directory (prevent path traversal)
         if not str(full_path).startswith(str(base)):
             msg = f"🚫 Security: Path traversal attempt blocked: {relative_path}"
             print(msg)
             if log_callback: log_callback(msg)
             raise ValueError(f"Path traversal attempt detected: {relative_path}")
         
-        # Security: Only allow specific file extensions
         ext = full_path.suffix.lower()
         if ext not in ALLOWED_EXTENSIONS:
             msg = f"🚫 Security: Blocked file with disallowed extension: {ext}"
@@ -79,36 +75,49 @@ class BackendAgent:
         os.makedirs(os.path.dirname(full_path), exist_ok=True)
         with open(full_path, "w", encoding="utf-8") as f:
             f.write(content)
-        msg = f"⚙️ SomaBack Saved: {full_path}"
+        msg = f"💾 SomaBack Saved: {full_path}"
         print(msg)
         if log_callback: log_callback(msg)
 
     def execute_task(self, task_description: str, log_callback=None) -> str:
-        if not self.model:
-            return "Error: Gemini API Key not configured."
-            
+        if not self.client:
+            return "Error: OpenAI API Key not configured."
+        
         msg = f"⚙️ SomaBack working on: {task_description}"
         print(msg)
         if log_callback: log_callback(msg)
-
+        
         try:
-            prompt = f"{SYSTEM_PROMPT}\n\nTASK: {task_description}\n\nGenerate the necessary files now."
-            response = self.model.generate_content(prompt)
-            text = response.text
+            messages = [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": f"TASK: {task_description}\n\nGenerate the necessary files now."}
+            ]
+            
+            response = self.client.chat.completions.create(
+                model=self.model_name,
+                messages=messages,
+                temperature=0.7
+            )
+            
+            text = response.choices[0].message.content
+            
+            if log_callback: log_callback(f"📝 Generated response: {len(text)} characters")
             
             # Regex Parsing for Files
-            # Match python or generic code blocks
             files = re.findall(r"\*\*FILE: (.*?)\*\*\n```(?:python)?\n(.*?)```", text, re.DOTALL)
             
             if not files:
-                 return f"SomaBack failed to generate files. Raw output parsing failed."
+                return f"SomaBack failed to generate files. Raw output: {text[:500]}..."
 
             generated_files = []
             for filename, content in files:
                 self.save_file(filename.strip(), content.strip(), log_callback)
-                generated_files.append(filename)
+                generated_files.append(filename.strip())
                 
             return f"SomaBack Successfully Created: {', '.join(generated_files)}"
 
         except Exception as e:
-            return f"SomaBack Execution Error: {str(e)}"
+            error_msg = f"SomaBack Execution Error: {str(e)}"
+            print(error_msg)
+            if log_callback: log_callback(error_msg)
+            return error_msg

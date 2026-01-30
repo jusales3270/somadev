@@ -1,0 +1,22 @@
+# Arquivo de exemplo.
+# Ajuste portas/serviços conforme necessário.
+# Se você já usa Supabase CLI, este arquivo costuma ser gerado automaticamente via `supabase init`.
+
+project_id = "local"
+
+[api]
+enabled = true
+port = 54321
+
+[db]
+port = 54322
+
+[studio]
+enabled = true
+port = 54323
+
+[auth]
+enabled = true
+
+[storage]
+enabled = true

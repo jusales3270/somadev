@@ -20,12 +20,9 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
-      <body className={`${inter.className} flex`}>
-        {/* Sidebar Fixa */}
+    <html lang="en" suppressHydrationWarning>
+      <body className={`${inter.className} flex`} suppressHydrationWarning>
         <Sidebar />
-
-        {/* Conteúdo Principal Dinâmico */}
         <main className="flex-1 bg-zinc-950 text-white overflow-hidden">
           {children}
         </main>

@@ -1,88 +1,89 @@
 import os
 import re
-import google.generativeai as genai
+import pathlib
+from openai import OpenAI
 from dotenv import load_dotenv
 
 load_dotenv()
 
 SYSTEM_PROMPT = """
 # IDENTITY
-Você é **SomaQA**, o Sentinela da Qualidade do ecossistema SomaDev.
-Sua missão é garantir que nada vá para produção com bugs, sem testes ou com baixa acessibilidade.
+Você é **SomaQA**, o especialista em Qualidade do ecossistema SomaDev.
+Sua responsabilidade é criar testes unitários e E2E de alta cobertura.
 
-# YOUR PHILOSOPHY: "ZERO BUGS TOLERANCE"
-- Você não confia no código. Você o testa.
-- Você prefere um erro explícito agora do que um bug silencioso depois.
-- Você é chato com detalhes: indentação, tipagem e nomenclaturas.
-
-# RESPONSIBILITIES
-1.  **Unit Tests:** Criar testes unitários para componentes (Jest/React Testing Library) e funções backend (Pytest).
-2.  **Code Review:** Analisar snippets e apontar falhas de segurança ou lógica.
-3.  **E2E Scenarios:** Escrever roteiros de teste Cypress/Playwright (em formato de texto ou código).
+# YOUR ESTHETIC: "ZERO BUGS TOLERANCE"
+- Você escreve testes que capturam edge cases.
+- Stack: Jest, React Testing Library, Pytest, Playwright.
 
 # OUTPUT FORMAT (STRICT)
-
-Para cada arquivo que você criar, use o seguinte formato EXATO:
-
-**FILE: [caminho/relativo/do/arquivo]**
-```[linguagem]
+**FILE: [caminho/relativo/do/arquivo.test.tsx ou .test.py]**
+```tsx ou python
 // código aqui
 ```
-
-Exemplo:
-**FILE: frontend/src/__tests__/Button.test.tsx**
-```tsx
-import { render, screen } from '@testing-library/react';
-import Button from '../components/Button';
-...
-```
-
-Se precisar criar múltiplos arquivos, repita o padrão.
 """
+
+ALLOWED_EXTENSIONS = {'.test.tsx', '.test.ts', '.test.py', '.spec.ts', '.spec.tsx', '.py', '.tsx', '.ts'}
 
 class QAAgent:
     def __init__(self, api_key: str = None):
-        self.api_key = api_key or os.getenv("GEMINI_API_KEY")
+        self.api_key = api_key or os.getenv("OPENAI_API_KEY")
+        self.client = None
+        self.model_name = "gpt-5.2"
+        
         if self.api_key:
-            genai.configure(api_key=self.api_key)
-            self.model = genai.GenerativeModel('gemini-2.0-flash') 
-            # SomaQA can write anywhere in the project to add tests
-            self.base_path = "c:/Users/Administrador/Desktop/somadev"
+            try:
+                self.client = OpenAI(api_key=self.api_key)
+                print(f"✅ SomaQA initialized with {self.model_name}")
+            except Exception as e:
+                print(f"❌ SomaQA failed: {e}")
+        
+        self.base_path = pathlib.Path(os.getenv("SOMADEV_FRONTEND_PATH", "./frontend/src")).resolve()
     
     def save_file(self, relative_path: str, content: str, log_callback=None):
-        full_path = os.path.join(self.base_path, relative_path)
+        base = self.base_path.resolve()
+        clean_path = relative_path.strip().lstrip('./')
+        full_path = (base / clean_path).resolve()
+        
+        if not str(full_path).startswith(str(base)):
+            raise ValueError(f"Path traversal blocked: {relative_path}")
+        
         os.makedirs(os.path.dirname(full_path), exist_ok=True)
         with open(full_path, "w", encoding="utf-8") as f:
             f.write(content)
-        msg = f"🛡️ SomaQA Saved: {full_path}"
+        msg = f"💾 SomaQA Saved: {full_path}"
         print(msg)
         if log_callback: log_callback(msg)
 
     def execute_task(self, task_description: str, log_callback=None) -> str:
-        if not self.model:
-            return "Error: Gemini API Key not configured."
+        if not self.client:
+            return "Error: OpenAI API Key not configured."
         
-        msg = f"🛡️ SomaQA working on: {task_description}"
+        msg = f"🧪 SomaQA working on: {task_description}"
         print(msg)
         if log_callback: log_callback(msg)
         
         try:
-            prompt = f"{SYSTEM_PROMPT}\n\nTASK: {task_description}\n\nGenerate the necessary files/tests now."
-            response = self.model.generate_content(prompt)
-            text = response.text
+            response = self.client.chat.completions.create(
+                model=self.model_name,
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": f"TASK: {task_description}\n\nGenerate tests."}
+                ],
+                temperature=0.7
+            )
             
-            # Regex Parsing for Files
-            files = re.findall(r"\*\*FILE: (.*?)\*\*\n```(?:.*?)?\n(.*?)```", text, re.DOTALL)
+            text = response.choices[0].message.content
+            files = re.findall(r"\*\*FILE: (.*?)\*\*\n```(?:tsx|typescript|python)?\n(.*?)```", text, re.DOTALL)
             
             if not files:
-                 return f"SomaQA verified the task. No new files generated (Validation Passed or Review-only)."
+                return f"SomaQA failed. Output: {text[:500]}..."
 
-            generated_files = []
+            generated = []
             for filename, content in files:
                 self.save_file(filename.strip(), content.strip(), log_callback)
-                generated_files.append(filename)
+                generated.append(filename.strip())
                 
-            return f"SomaQA Successfully Created: {', '.join(generated_files)}"
+            return f"SomaQA Created: {', '.join(generated)}"
 
         except Exception as e:
-            return f"SomaQA Execution Error: {str(e)}"
+            return f"SomaQA Error: {str(e)}"

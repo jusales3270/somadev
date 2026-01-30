@@ -1,125 +1,77 @@
-"""
-SomaMobile - The Mobile Developer Agent
-AIOS Role: React Native / Expo Developer
-"""
 import os
 import re
 import pathlib
-import google.generativeai as genai
+from openai import OpenAI
 from dotenv import load_dotenv
 
 load_dotenv()
 
 SYSTEM_PROMPT = """
 # IDENTITY
-Você é **SomaMobile**, o Desenvolvedor Mobile do SomaDev.
-Você é o "Native Flow" - especialista em apps iOS e Android.
-
-# YOUR PHILOSOPHY: "NATIVE PERFORMANCE, CROSS-PLATFORM REACH"
-- Você domina React Native e Expo.
-- Você entende as diferenças entre iOS e Android.
-- Você otimiza para performance e experiência nativa.
-- Você segue as Human Interface Guidelines (iOS) e Material Design (Android).
-
-# TECH STACK
-- **Framework:** React Native com Expo SDK
-- **Navigation:** React Navigation v6+
-- **State:** Zustand ou Redux Toolkit
-- **Styling:** StyleSheet nativo ou NativeWind
-- **Forms:** React Hook Form
-- **API:** React Query + Axios
-
-# CODING RULES
-1. **Functional Components:** Sempre use hooks.
-2. **Type Safety:** TypeScript obrigatório.
-3. **Platform-Specific:** Use Platform.select() quando necessário.
-4. **Performance:** Evite re-renders desnecessários (memo, useMemo, useCallback).
-5. **Accessibility:** Inclua accessibilityLabel em elementos interativos.
-6. **Deep Linking:** Configure linking para navegação externa.
+Você é **SomaMobile**, especialista em desenvolvimento mobile com React Native/Expo.
 
 # OUTPUT FORMAT (STRICT)
-
-Para cada arquivo que você criar, use o seguinte formato EXATO:
-
 **FILE: [caminho/relativo/do/arquivo.tsx]**
 ```tsx
-// código aqui
+// código
 ```
-
-Exemplo:
-**FILE: src/screens/HomeScreen.tsx**
-```tsx
-import React from 'react';
-import { View, Text, StyleSheet } from 'react-native';
-...
-```
-
-# COLLABORATION
-- Você reporta para **SomaLead** (Tech Lead)
-- **SomaDesign** fornece seus design tokens
-- **SomaBack** fornece as APIs
 """
 
-ALLOWED_EXTENSIONS = {'.tsx', '.ts', '.js', '.jsx', '.json', '.md'}
+ALLOWED_EXTENSIONS = {'.tsx', '.ts', '.js', '.json'}
 
 class MobileAgent:
     def __init__(self, api_key: str = None):
-        self.api_key = api_key or os.getenv("GEMINI_API_KEY")
+        self.api_key = api_key or os.getenv("OPENAI_API_KEY")
+        self.client = None
+        self.model_name = "gpt-5.2"
+        
         if self.api_key:
-            genai.configure(api_key=self.api_key)
-            self.model = genai.GenerativeModel('gemini-2.0-flash')
-            self.base_path = pathlib.Path(os.getenv("SOMADEV_WORKSPACE_PATH", "./backend/workspace")).resolve()
+            try:
+                self.client = OpenAI(api_key=self.api_key)
+                print(f"✅ SomaMobile initialized")
+            except Exception as e:
+                print(f"❌ SomaMobile failed: {e}")
+        
+        self.base_path = pathlib.Path("./mobile/src").resolve()
     
     def save_file(self, relative_path: str, content: str, log_callback=None):
-        """Safely save a file with path traversal protection."""
         base = self.base_path.resolve()
-        clean_path = relative_path.strip().lstrip('./')
-        full_path = (base / clean_path).resolve()
+        os.makedirs(base, exist_ok=True)
+        full_path = (base / relative_path.strip().lstrip('./')).resolve()
         
         if not str(full_path).startswith(str(base)):
-            msg = f"🚫 Security: Path traversal attempt blocked: {relative_path}"
-            print(msg)
-            if log_callback: log_callback(msg)
-            raise ValueError(f"Path traversal attempt detected: {relative_path}")
-        
-        ext = full_path.suffix.lower()
-        if ext not in ALLOWED_EXTENSIONS:
-            msg = f"🚫 Security: Blocked file with disallowed extension: {ext}"
-            print(msg)
-            if log_callback: log_callback(msg)
-            raise ValueError(f"File extension not allowed: {ext}")
+            raise ValueError("Path traversal blocked")
         
         os.makedirs(os.path.dirname(full_path), exist_ok=True)
         with open(full_path, "w", encoding="utf-8") as f:
             f.write(content)
-        msg = f"📱 SomaMobile Saved: {full_path}"
-        print(msg)
-        if log_callback: log_callback(msg)
+        if log_callback: log_callback(f"💾 Saved: {full_path}")
 
     def execute_task(self, task_description: str, log_callback=None) -> str:
-        if not self.model:
-            return "Error: Gemini API Key not configured."
+        if not self.client:
+            return "Error: API Key not configured."
         
         msg = f"📱 SomaMobile working on: {task_description}"
-        print(msg)
         if log_callback: log_callback(msg)
         
         try:
-            prompt = f"{SYSTEM_PROMPT}\n\nTASK: {task_description}\n\nGenerate the necessary React Native files now."
-            response = self.model.generate_content(prompt)
-            text = response.text
-            
-            files = re.findall(r"\*\*FILE: (.*?)\*\*\n```(?:tsx|ts|js|jsx|json)?\n(.*?)```", text, re.DOTALL)
+            response = self.client.chat.completions.create(
+                model=self.model_name,
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": f"TASK: {task_description}"}
+                ],
+                temperature=0.7
+            )
+            text = response.choices[0].message.content
+            files = re.findall(r"\*\*FILE: (.*?)\*\*\n```(?:tsx|ts)?\n(.*?)```", text, re.DOTALL)
             
             if not files:
-                return f"SomaMobile failed to generate files. Raw output available in logs."
+                return f"SomaMobile failed. Output: {text[:300]}..."
 
-            generated_files = []
             for filename, content in files:
                 self.save_file(filename.strip(), content.strip(), log_callback)
-                generated_files.append(filename)
                 
-            return f"SomaMobile Successfully Created: {', '.join(generated_files)}"
-
+            return f"SomaMobile Created: {len(files)} files"
         except Exception as e:
-            return f"SomaMobile Execution Error: {str(e)}"
+            return f"SomaMobile Error: {str(e)}"
